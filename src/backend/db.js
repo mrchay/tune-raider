@@ -82,12 +82,17 @@ function migrate() {
   }
   if (!cols.includes('safe_filename')) {
     db.exec("ALTER TABLE tracks ADD COLUMN safe_filename TEXT DEFAULT ''");
-    // Backfill existing tracks
     const tracks = db.prepare('SELECT key, artist, title FROM tracks WHERE safe_filename = ""').all();
     const update = db.prepare('UPDATE tracks SET safe_filename = ? WHERE key = ?');
     for (const t of tracks) {
       update.run(safeFilename(`${t.artist} - ${t.title}`), t.key);
     }
+  }
+  if (!cols.includes('queue_stage')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN queue_stage TEXT DEFAULT ''");
+  }
+  if (!cols.includes('queue_mode')) {
+    db.exec("ALTER TABLE tracks ADD COLUMN queue_mode TEXT DEFAULT ''");
   }
 }
 
@@ -235,22 +240,43 @@ function selectCandidate(trackKey, candidateId) {
   txn();
 }
 
-// Reset tracks stuck in intermediate states (from interrupted runs)
+/** Get tracks that were queued (persisted) — for restoring queue after restart */
+function getQueuedTracks() {
+  return db.prepare(`SELECT * FROM tracks WHERE status = 'queued' AND queue_stage != ''`).all();
+}
+
+/** Reset all queued tracks back to their pre-queue state (for stop/cancel) */
+function resetQueuedTracks() {
+  const txn = db.transaction(() => {
+    // Queued for search → ready
+    db.prepare(`UPDATE tracks SET status = 'ready', queue_stage = '', queue_mode = '' WHERE status = 'queued' AND queue_stage = 'search'`).run();
+    // Queued for download → searched
+    db.prepare(`UPDATE tracks SET status = 'searched', queue_stage = '', queue_mode = '' WHERE status = 'queued' AND queue_stage = 'download'`).run();
+    // Queued for analyse → downloaded
+    db.prepare(`UPDATE tracks SET status = 'downloaded', queue_stage = '', queue_mode = '' WHERE status = 'queued' AND queue_stage = 'analyse'`).run();
+    // Any remaining queued without stage info → ready
+    db.prepare(`UPDATE tracks SET status = 'ready', queue_stage = '', queue_mode = '' WHERE status = 'queued'`).run();
+  });
+  txn();
+}
+
+/** Reset tracks stuck in intermediate statuses (from interrupted runs).
+ *  Re-queues them so restoreQueue() picks them up on next startup. */
 function recoverStuckTracks() {
   const stuck = db.prepare(`
-    SELECT key, status FROM tracks
-    WHERE status IN ('queued', 'searching', 'downloading', 'checking', 'fingerprinting')
+    SELECT key, status, queue_mode FROM tracks
+    WHERE status IN ('searching', 'downloading', 'checking', 'fingerprinting')
   `).all();
 
   if (stuck.length === 0) return 0;
 
   const txn = db.transaction(() => {
-    // searching → ready (search didn't complete, need to redo)
-    db.prepare(`UPDATE tracks SET status = 'ready' WHERE status IN ('queued', 'searching')`).run();
-    // downloading → searched (download didn't complete, can retry)
-    db.prepare(`UPDATE tracks SET status = 'searched' WHERE status = 'downloading'`).run();
-    // checking/fingerprinting → downloaded (analysis didn't complete, can retry)
-    db.prepare(`UPDATE tracks SET status = 'downloaded' WHERE status IN ('checking', 'fingerprinting')`).run();
+    // searching → re-queue for search
+    db.prepare(`UPDATE tracks SET status = 'queued', queue_stage = 'search' WHERE status = 'searching'`).run();
+    // downloading → re-queue for download
+    db.prepare(`UPDATE tracks SET status = 'queued', queue_stage = 'download' WHERE status = 'downloading'`).run();
+    // checking/fingerprinting → re-queue for analyse
+    db.prepare(`UPDATE tracks SET status = 'queued', queue_stage = 'analyse' WHERE status IN ('checking', 'fingerprinting')`).run();
   });
   txn();
 
@@ -261,5 +287,6 @@ module.exports = {
   open, close, get,
   upsertTrack, upsertTracksFromCSV, getAllTracks, getTrack,
   updateTrackStatus, resetTrackForRedownload, deletePlaylist, getPlaylists,
-  insertCandidates, getCandidates, selectCandidate, recoverStuckTracks
+  insertCandidates, getCandidates, selectCandidate,
+  getQueuedTracks, resetQueuedTracks, recoverStuckTracks,
 };

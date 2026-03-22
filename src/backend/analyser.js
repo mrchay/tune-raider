@@ -183,6 +183,7 @@ function runPython(args, opts = {}) {
       timeout: opts.timeout || 120000,
       encoding: 'buffer',
       maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
       env,
       cwd: opts.cwd || __dirname,
     }, (error, stdout, stderr) => {

@@ -55,12 +55,10 @@ function ensureWorkspaceDirs(wsPath) {
 function initWorkspace(wsPath) {
   ensureWorkspaceDirs(wsPath);
   db.open(wsPath);
-  const recovered = db.recoverStuckTracks();
-  if (recovered > 0) {
-    log(`Recovered ${recovered} track(s) from interrupted state`);
-  }
-  syncPlaylistsFromDisk(wsPath);
   pipeline.setWorkspace(wsPath);
+  pipeline.cleanup();
+  syncPlaylistsFromDisk(wsPath);
+  pipeline.restoreQueue();
 }
 
 // ── CSV parsing ──
@@ -251,6 +249,13 @@ wss.on('connection', (ws) => {
   });
 
   ws.send(JSON.stringify({ type: 'welcome', version: '1.0.0' }));
+
+  // Send current pipeline state so the client sees queue/paused status immediately
+  if (db.get()) {
+    const pipeline = require('./pipeline');
+    // Trigger a broadcast so this client gets the current state
+    setImmediate(() => pipeline.broadcastProgress());
+  }
 });
 
 function handleMessage(ws, msg) {
@@ -384,16 +389,25 @@ function handleMessage(ws, msg) {
 
     case 'getConfig': {
       const config = loadConfig();
-      ws.send(JSON.stringify({ type: 'config', acoustid_api_key: config.acoustid_api_key || '' }));
+      ws.send(JSON.stringify({
+        type: 'config',
+        acoustid_api_key: config.acoustid_api_key || '',
+        request_delay: config.request_delay ?? 2,
+      }));
       break;
     }
 
     case 'setConfig': {
       const config = loadConfig();
       if (msg.acoustid_api_key !== undefined) config.acoustid_api_key = msg.acoustid_api_key;
+      if (msg.request_delay !== undefined) config.request_delay = Number(msg.request_delay);
       saveConfig(config);
       log('Config updated');
-      ws.send(JSON.stringify({ type: 'config', acoustid_api_key: config.acoustid_api_key || '' }));
+      ws.send(JSON.stringify({
+        type: 'config',
+        acoustid_api_key: config.acoustid_api_key || '',
+        request_delay: config.request_delay ?? 2,
+      }));
       break;
     }
 
@@ -447,6 +461,18 @@ function handleMessage(ws, msg) {
       break;
     }
 
+    case 'stopPipeline':
+      pipeline.stop();
+      break;
+
+    case 'pausePipeline':
+      pipeline.pause();
+      break;
+
+    case 'resumePipeline':
+      pipeline.resume();
+      break;
+
     case 'ping':
       ws.send(JSON.stringify({ type: 'pong' }));
       break;
@@ -467,8 +493,10 @@ function broadcast(data) {
 
 function log(message, level = 'log') {
   const prefix = level === 'error' ? '[backend:error]' : level === 'warn' ? '[backend:warn]' : '[backend]';
-  console.log(`${prefix} ${message}`);
-  broadcast({ type: 'log', message, level });
+  // Strip null bytes — yt-dlp/ffmpeg can leak them on Windows
+  const clean = String(message).replace(/\0/g, '');
+  console.log(`${prefix} ${clean}`);
+  broadcast({ type: 'log', message: clean, level });
 }
 
 // ── YouTube status check ──
@@ -502,7 +530,7 @@ function checkYtStatus(ws) {
     '--geo-bypass',
     '--js-runtimes', 'node',
     testUrl,
-  ], { timeout: 45000 }, (err, stdout, stderr) => {
+  ], { timeout: 45000, windowsHide: true }, (err, stdout, stderr) => {
     const output = (stdout || '').toString('utf-8');
 
     // Find audio-only lines

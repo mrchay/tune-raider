@@ -172,6 +172,7 @@ function handleMessage(msg) {
       if (msg.acoustid_api_key) {
         document.getElementById('acoustid-key').value = msg.acoustid_api_key;
       }
+      document.getElementById('request-delay').value = msg.request_delay ?? 2;
       break;
 
     case 'error':
@@ -788,17 +789,41 @@ function updateDockStats(stats) {
   if (!stats) return;
   const el = document.getElementById('dock-stats');
   const parts = [];
+  if (stats.paused) parts.push('PAUSED');
   if (stats.active) parts.push(`${stats.active} active`);
   if (stats.pending) parts.push(`${stats.pending} pending`);
   if (stats.done) parts.push(`${stats.done} done`);
   if (stats.failed) parts.push(`${stats.failed} failed`);
   el.textContent = parts.length ? '(' + parts.join(', ') + ')' : '';
+
+  // Toggle pause/resume button visibility
+  const btnPause = document.getElementById('btn-pipeline-pause');
+  const btnResume = document.getElementById('btn-pipeline-resume');
+  if (stats.paused) {
+    btnPause.style.display = 'none';
+    btnResume.style.display = '';
+    btnResume.classList.add('active');
+  } else {
+    btnPause.style.display = '';
+    btnResume.style.display = 'none';
+    btnResume.classList.remove('active');
+  }
 }
 
 // ── Dock toggle & resize ──
 
 document.getElementById('btn-toggle-dock').addEventListener('click', () => {
   document.getElementById('dock').classList.toggle('collapsed');
+});
+
+document.getElementById('btn-pipeline-stop').addEventListener('click', () => {
+  send('stopPipeline');
+});
+document.getElementById('btn-pipeline-pause').addEventListener('click', () => {
+  send('pausePipeline');
+});
+document.getElementById('btn-pipeline-resume').addEventListener('click', () => {
+  send('resumePipeline');
 });
 
 const dockHandle = document.getElementById('dock-handle');
@@ -928,6 +953,11 @@ document.getElementById('btn-save-acoustid').addEventListener('click', () => {
   const el = document.getElementById('acoustid-status');
   el.textContent = 'API key saved';
   el.className = 'acoustid-status ok';
+});
+
+document.getElementById('btn-save-delay').addEventListener('click', () => {
+  const delay = Number(document.getElementById('request-delay').value) || 0;
+  send('setConfig', { request_delay: delay });
 });
 
 // ── Settings modal ──

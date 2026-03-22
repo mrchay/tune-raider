@@ -142,6 +142,7 @@ function runYtdlp(args, opts = {}) {
       timeout: opts.timeout || 300000,
       encoding: 'buffer',
       maxBuffer: 50 * 1024 * 1024,
+      windowsHide: true,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
     }, (error, stdout, stderr) => {
       resolve({

@@ -5,7 +5,7 @@
  * Uses yt-dlp to search YouTube Music, gathers candidates,
  * scores them against expected track metadata, returns ranked results.
  */
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
@@ -101,34 +101,48 @@ function getYtdlpPath() {
   return 'yt-dlp';
 }
 
-function getCookiesPath(workspacePath) {
-  const p = path.join(workspacePath, 'cookies.txt');
-  return fs.existsSync(p) ? p : null;
-}
+
 
 function runYtdlp(args, opts = {}) {
   const ytdlp = getYtdlpPath();
   const cleanArgs = args.map(a => a.replace(/^"|"$/g, ''));
   return new Promise((resolve) => {
-    execFile(ytdlp, cleanArgs, {
+    const proc = spawn(ytdlp, cleanArgs, {
       cwd: opts.cwd || __dirname,
-      timeout: opts.timeout || 60000,
-      encoding: 'buffer',
-      maxBuffer: 10 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    }, (error, stdout, stderr) => {
+    });
+
+    const stdoutChunks = [];
+    const stderrChunks = [];
+    proc.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
+    proc.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+
+    const timer = setTimeout(() => {
+      try { proc.kill(); } catch {}
+    }, opts.timeout || 60000);
+
+    proc.on('close', (code) => {
+      clearTimeout(timer);
       resolve({
-        status: error ? (error.code || 1) : 0,
-        stdout: stdout ? stdout.toString('utf-8') : '',
-        stderr: stderr ? stderr.toString('utf-8') : '',
-        error,
+        status: code || 0,
+        stdout: Buffer.concat(stdoutChunks).toString('utf-8'),
+        stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+        error: code ? { code } : null,
       });
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ status: 1, stdout: '', stderr: '', error: err });
     });
   });
 }
 
-function buildBaseArgs(workspacePath) {
-  const args = [
+function buildBaseArgs() {
+  // No cookies for search — avoids tying account to search traffic and rate limiting
+  return [
     '--user-agent', USER_AGENT,
     '--referer', 'https://music.youtube.com/',
     '--js-runtimes', 'node',
@@ -137,11 +151,6 @@ function buildBaseArgs(workspacePath) {
     '--no-playlist',
     '--geo-bypass',
   ];
-  const cookies = getCookiesPath(workspacePath);
-  if (cookies) {
-    args.unshift('--cookies', cookies);
-  }
-  return args;
 }
 
 // ── Search queries ──
@@ -157,12 +166,12 @@ function buildSearches(track) {
 
 // ── Gather candidates ──
 
-async function gatherCandidates(track, workspacePath, log, opts = {}) {
+async function gatherCandidates(track, _workspacePath, log, opts = {}) {
   const maxPerSearch = opts.maxPerSearch || 5;
   const searches = buildSearches(track);
   const seen = new Set();
   const candidates = [];
-  const baseArgs = buildBaseArgs(workspacePath);
+  const baseArgs = buildBaseArgs();
 
   const printTemplate = [
     '%(title)s', '%(webpage_url)s', '%(duration)s', '%(channel)s',
@@ -170,6 +179,10 @@ async function gatherCandidates(track, workspacePath, log, opts = {}) {
   ].join('|||');
 
   for (const [searchIdx, search] of searches.entries()) {
+    // Delay between search queries to avoid rate limiting
+    if (searchIdx > 0 && opts.delayMs > 0) {
+      await new Promise(r => setTimeout(r, opts.delayMs));
+    }
     const t0 = Date.now();
     log(`  [search ${searchIdx + 1}/${searches.length}] ${search.label}...`);
 
@@ -359,11 +372,11 @@ function scoreCandidate(candidate, track) {
 
 // ── Search a single track ──
 
-async function searchTrack(track, workspacePath, log) {
+async function searchTrack(track, workspacePath, log, opts = {}) {
   const t0 = Date.now();
   log(`Searching: "${track.artist} - ${track.title}" [${track.album || '?'}]`);
 
-  const candidates = await gatherCandidates(track, workspacePath, log);
+  const candidates = await gatherCandidates(track, workspacePath, log, { delayMs: opts.delayMs || 0 });
 
   if (candidates.length === 0) {
     log(`  No candidates found`);

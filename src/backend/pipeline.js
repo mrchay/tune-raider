@@ -2,7 +2,10 @@
  * pipeline.js — Multi-stage pipeline with per-stage thread pools.
  * Stages: search → download → analyse (quality check + fingerprint)
  * Each stage has its own queue and configurable thread count.
+ * Queue is persisted to DB so it survives restarts.
  */
+const fs = require('fs');
+const path = require('path');
 const { searchTrack } = require('./search');
 const { downloadTrack } = require('./downloader');
 const { analyseTrack } = require('./analyser');
@@ -11,6 +14,20 @@ const db = require('./db');
 let broadcastFn = null;
 let logFn = null;
 let workspacePath = '';
+let paused = false;
+
+function getRequestDelay() {
+  try {
+    const config = JSON.parse(require('fs').readFileSync(
+      require('path').join(__dirname, '..', '..', 'config.json'), 'utf-8'
+    ));
+    return (config.request_delay ?? 2) * 1000;
+  } catch { return 2000; }
+}
+
+function sleep(ms) {
+  return ms > 0 ? new Promise(r => setTimeout(r, ms)) : Promise.resolve();
+}
 
 // Per-stage state
 const stages = {
@@ -32,7 +49,6 @@ function setWorkspace(wsPath) {
 // ── Enqueue ──
 
 function enqueue(keys, threadConfig, mode) {
-  // Update thread counts from config
   if (threadConfig) {
     if (threadConfig.search) stages.search.numThreads = threadConfig.search;
     if (threadConfig.download) stages.download.numThreads = threadConfig.download;
@@ -46,7 +62,6 @@ function enqueue(keys, threadConfig, mode) {
     if (!track) continue;
 
     // Determine which stage to enter based on mode and track status
-    // Explicit mode requests always allow re-running that stage
     let targetStage = null;
     if (mode === 'search') {
       targetStage = 'search';
@@ -64,14 +79,42 @@ function enqueue(keys, threadConfig, mode) {
 
     if (!targetStage) continue;
 
-    db.updateTrackStatus(key, 'queued');
-    stages[targetStage].queue.push({ key, track, continueFullPipeline: mode === 'full' });
+    const continueFullPipeline = mode === 'full';
+    db.updateTrackStatus(key, 'queued', {
+      queue_stage: targetStage,
+      queue_mode: continueFullPipeline ? 'full' : targetStage,
+    });
+    stages[targetStage].queue.push({ key, track, continueFullPipeline });
     added++;
   }
 
   logFn(`Queued ${added} tracks (mode: ${mode})`);
   broadcastProgress();
-  fillAllStages();
+  if (!paused) fillAllStages();
+}
+
+/** Restore queued tracks from DB after restart */
+function restoreQueue() {
+  if (!db.get()) return 0;
+  const queued = db.getQueuedTracks();
+  let restored = 0;
+  for (const t of queued) {
+    const stage = t.queue_stage || 'search';
+    if (!stages[stage]) continue;
+    if (isQueued(t.key) || isActive(t.key)) continue;
+    stages[stage].queue.push({
+      key: t.key,
+      track: t,
+      continueFullPipeline: t.queue_mode === 'full',
+    });
+    restored++;
+  }
+  if (restored > 0) {
+    paused = true;
+    logFn(`Restored ${restored} queued track(s) from previous session — press Resume to continue`);
+    broadcastProgress();
+  }
+  return restored;
 }
 
 function isQueued(key) {
@@ -85,12 +128,14 @@ function isActive(key) {
 // ── Worker management ──
 
 function fillAllStages() {
+  if (paused) return;
   for (const stageName of ['search', 'download', 'analyse']) {
     fillStage(stageName);
   }
 }
 
 function fillStage(stageName) {
+  if (paused) return;
   const stage = stages[stageName];
 
   // Ensure enough worker slots
@@ -132,16 +177,18 @@ async function runStageWorker(stageName, worker, item) {
     }
 
     // In full pipeline mode, advance to the next stage
-    if (continueFullPipeline) {
+    if (continueFullPipeline && !paused) {
       const updatedTrack = db.getTrack(key);
       if (stageName === 'search' && updatedTrack && updatedTrack.status === 'searched') {
+        db.updateTrackStatus(key, 'queued', { queue_stage: 'download', queue_mode: 'full' });
         stages.download.queue.push({ key, track: updatedTrack, continueFullPipeline: true });
       } else if (stageName === 'download' && updatedTrack && (updatedTrack.status === 'downloaded' || updatedTrack.status === 'complete')) {
+        db.updateTrackStatus(key, 'queued', { queue_stage: 'analyse', queue_mode: 'full' });
         stages.analyse.queue.push({ key, track: updatedTrack, continueFullPipeline: true });
       }
     }
   } catch (err) {
-    db.updateTrackStatus(key, 'failed', { error: err.message });
+    db.updateTrackStatus(key, 'failed', { error: err.message, queue_stage: '', queue_mode: '' });
     logFn(`Pipeline error [${stageName}] "${track.artist} - ${track.title}": ${err.message}`, 'error');
   }
 
@@ -159,21 +206,115 @@ async function runStageWorker(stageName, worker, item) {
   }
 
   broadcastProgress();
-  setImmediate(() => fillAllStages());
+  if (!paused) {
+    // Delay between YouTube requests to avoid rate limiting
+    if (stageName === 'search' || stageName === 'download') {
+      const delay = getRequestDelay();
+      if (delay > 0) {
+        worker.detail = `Waiting ${delay / 1000}s (rate limit)...`;
+        broadcastProgress();
+        await sleep(delay);
+      }
+    }
+    setImmediate(() => fillAllStages());
+  }
+}
+
+// ── Stop / Pause / Resume ──
+
+function stop() {
+  paused = false;
+  // Clear all in-memory queues
+  for (const stage of Object.values(stages)) {
+    stage.queue = [];
+  }
+  // Reset all queued tracks in DB back to their pre-queue state
+  db.resetQueuedTracks();
+  logFn('Pipeline stopped — queue cleared');
+  broadcastProgress();
+}
+
+function pause() {
+  paused = true;
+  logFn('Pipeline paused — current threads will finish, queue is held');
+  broadcastProgress();
+}
+
+function resume() {
+  if (!paused) return;
+  paused = false;
+  // Run cleanup before resuming
+  cleanup();
+  logFn('Pipeline resumed');
+  broadcastProgress();
+  fillAllStages();
+}
+
+function isPaused() {
+  return paused;
+}
+
+// ── Cleanup ──
+
+/** Run on startup and before resume to ensure consistent state */
+function cleanup() {
+  if (!db.get()) return;
+
+  // 1. Recover tracks stuck in intermediate statuses (searching/downloading/checking)
+  const recovered = db.recoverStuckTracks();
+  if (recovered > 0) {
+    logFn(`Recovered ${recovered} track(s) from interrupted state`);
+  }
+
+  // 2. Delete partial downloads in temp folder
+  if (workspacePath) {
+    const tempDir = path.join(workspacePath, 'temp');
+    if (fs.existsSync(tempDir)) {
+      const tempFiles = fs.readdirSync(tempDir);
+      if (tempFiles.length > 0) {
+        for (const f of tempFiles) {
+          try { fs.unlinkSync(path.join(tempDir, f)); } catch {}
+        }
+        logFn(`Cleaned up ${tempFiles.length} partial file(s) from temp`);
+      }
+    }
+  }
+
+  // 3. Verify file_path entries exist for downloaded/complete tracks
+  if (db.get()) {
+    const tracks = db.get().prepare(
+      `SELECT key, file_path, status FROM tracks WHERE status IN ('downloaded', 'complete') AND file_path != ''`
+    ).all();
+    let orphaned = 0;
+    for (const t of tracks) {
+      if (!fs.existsSync(t.file_path)) {
+        db.updateTrackStatus(t.key, 'failed', {
+          error: 'Downloaded file missing',
+          file_path: '',
+          queue_stage: '',
+          queue_mode: '',
+        });
+        orphaned++;
+      }
+    }
+    if (orphaned > 0) {
+      logFn(`Found ${orphaned} track(s) with missing files — marked as failed`);
+    }
+  }
 }
 
 // ── Stage implementations ──
 
 async function runSearch(worker, key, track) {
   worker.detail = 'Starting search...';
-  db.updateTrackStatus(key, 'searching');
+  db.updateTrackStatus(key, 'searching', { queue_stage: '', queue_mode: '' });
   broadcastProgress();
 
   const result = await searchTrack(track, workspacePath, (msg) => {
     worker.detail = msg.replace(/^\s+/, '');
     broadcastProgress();
     logFn(msg);
-  });
+  }, { delayMs: getRequestDelay() });
 
   if (result.candidates.length > 0) {
     db.insertCandidates(key, result.candidates);
@@ -199,7 +340,7 @@ async function runDownload(worker, key, track) {
   }
 
   worker.detail = 'Starting download...';
-  db.updateTrackStatus(key, 'downloading');
+  db.updateTrackStatus(key, 'downloading', { queue_stage: '', queue_mode: '' });
   broadcastProgress();
 
   const result = await downloadTrack({
@@ -229,14 +370,14 @@ async function runAnalyse(worker, key, track) {
   const currentTrack = db.getTrack(key);
   const filePath = currentTrack?.file_path || track.file_path;
 
-  if (!filePath || !require('fs').existsSync(filePath)) {
+  if (!filePath || !fs.existsSync(filePath)) {
     db.updateTrackStatus(key, 'failed', { error: 'No downloaded file found for analysis' });
     logFn(`Analyse failed: "${track.artist} - ${track.title}" — no file`, 'error');
     return;
   }
 
   worker.detail = 'Starting analysis...';
-  db.updateTrackStatus(key, 'checking');
+  db.updateTrackStatus(key, 'checking', { queue_stage: '', queue_mode: '' });
   broadcastProgress();
 
   const result = await analyseTrack({
@@ -283,7 +424,6 @@ async function runAnalyse(worker, key, track) {
 function broadcastProgress() {
   if (!broadcastFn) return;
 
-  // Build thread data grouped by stage
   const threadData = [];
   for (const [stageName, stage] of Object.entries(stages)) {
     for (const w of stage.workers.slice(0, stage.numThreads)) {
@@ -298,7 +438,6 @@ function broadcastProgress() {
     }
   }
 
-  // Stats
   const allTracks = db.getAllTracks();
   const totalPending = Object.values(stages).reduce((n, s) => n + s.queue.length, 0);
   const totalActive = Object.values(stages).reduce((n, s) => n + s.workers.filter(w => w.busy).length, 0);
@@ -307,9 +446,9 @@ function broadcastProgress() {
     active: totalActive,
     done: allTracks.filter(t => t.status === 'searched' || t.status === 'complete' || t.status === 'downloaded').length,
     failed: allTracks.filter(t => t.status === 'failed').length,
+    paused,
   };
 
-  // Pending queue items
   const pending = [];
   for (const [stageName, stage] of Object.entries(stages)) {
     for (let i = 0; i < stage.queue.length; i++) {
@@ -322,10 +461,21 @@ function broadcastProgress() {
     }
   }
 
-  // Track status updates
+  // Track status updates (include analysis fields so frontend updates live)
   const updates = allTracks
     .filter(t => t.status !== 'ready')
-    .map(t => ({ key: t.key, status: t.status }));
+    .map(t => ({
+      key: t.key,
+      status: t.status,
+      quality: t.quality,
+      sample_rate: t.sample_rate,
+      peak_freq: t.peak_freq,
+      lossless: t.lossless,
+      match_confidence: t.match_confidence,
+      match_artist: t.match_artist,
+      match_title: t.match_title,
+      error: t.error,
+    }));
 
   broadcastFn({ type: 'downloadProgress', threads: threadData, stats, pending, updates });
 }
@@ -335,15 +485,17 @@ function setThreads(config) {
   if (config.download) stages.download.numThreads = config.download;
   if (config.analyse) stages.analyse.numThreads = config.analyse;
   broadcastProgress();
-  // If increased, fill any newly available slots
-  fillAllStages();
+  if (!paused) fillAllStages();
 }
 
 function shutdown() {
-  // Clear all queues
   for (const stage of Object.values(stages)) {
     stage.queue = [];
   }
 }
 
-module.exports = { init, setWorkspace, enqueue, setThreads, shutdown };
+module.exports = {
+  init, setWorkspace, enqueue, restoreQueue, cleanup,
+  stop, pause, resume, isPaused,
+  setThreads, shutdown, broadcastProgress,
+};

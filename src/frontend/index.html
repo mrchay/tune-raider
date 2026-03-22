@@ -155,6 +155,11 @@
                 <option value="8">8</option>
               </select></label>
             </div>
+            <div class="pipeline-controls">
+              <button id="btn-pipeline-pause" class="pipe-btn" title="Pause pipeline">&#9646;&#9646;</button>
+              <button id="btn-pipeline-resume" class="pipe-btn" title="Resume pipeline" style="display:none">&#9654;</button>
+              <button id="btn-pipeline-stop" class="pipe-btn" title="Stop pipeline">&#9632;</button>
+            </div>
             <button id="btn-clear-console" class="icon-btn" title="Clear console" style="display:none">&#128465;</button>
             <button id="btn-toggle-dock" class="icon-btn" title="Toggle dock">&#9650;</button>
           </div>
@@ -223,6 +228,19 @@
             <input type="file" id="cookie-file-input" accept=".txt" style="display:none">
           </div>
           <div class="cookie-status" id="cookie-status"></div>
+        </div>
+
+        <div class="settings-section">
+          <label>Rate Limiting</label>
+          <div class="settings-info">
+            Delay between YouTube requests to avoid rate limiting.
+            Applies between search queries and between downloads.
+          </div>
+          <div class="workspace-row">
+            <input type="number" id="request-delay" min="0" max="60" step="1" value="2" style="width:60px">
+            <span class="settings-info" style="margin:0;padding:4px 0">seconds between requests</span>
+            <button id="btn-save-delay" class="secondary-btn">Save</button>
+          </div>
         </div>
 
         <div class="settings-section">
