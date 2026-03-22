@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls /c/regional/tune-raider/*.js /c/regional/tune-raider/*.bat /c/regional/tune-raider/*.json /c/regional/tune-raider/.gitignore)"
+    ]
+  }
+}

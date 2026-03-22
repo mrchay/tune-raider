@@ -168,18 +168,65 @@ body {
 }
 
 #sidebar-art {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin-top: auto;
-  pointer-events: none;
-  flex-shrink: 0;
-  opacity: 0.4;
-  filter: brightness(0.6);
   position: absolute;
   bottom: 80px;
   left: 0;
+  width: 100%;
+  aspect-ratio: 342 / 750;
+  pointer-events: none;
+  opacity: 0.25;
   z-index: 0;
+  background: url('raider.png') center/contain no-repeat;
+}
+
+/* ── Glitch effect (active when pipeline is running) ── */
+
+#sidebar-art::before,
+#sidebar-art::after {
+  content: '';
+  display: none;
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  background: inherit;
+}
+
+#sidebar-art::before {
+  filter: hue-rotate(180deg);
+  z-index: -1;
+}
+
+#sidebar-art::after {
+  filter: hue-rotate(270deg);
+  z-index: -2;
+}
+
+
+/* One-shot glitch on button action */
+#sidebar-art.glitch-once::before,
+#sidebar-art.glitch-once::after {
+  display: block;
+}
+
+#sidebar-art.glitch-once::before {
+  left: 3px;
+  animation: glitch-once 0.3s step-end forwards;
+}
+
+#sidebar-art.glitch-once::after {
+  left: -3px;
+  animation: glitch-once 0.3s step-end reverse forwards;
+}
+
+@keyframes glitch-once {
+  0%   { clip-path: inset(0 0 100% 0); }
+  15%  { clip-path: inset(25% 0 55% 0); }
+  30%  { clip-path: inset(72% 0 10% 0); }
+  45%  { clip-path: inset(8% 0 78% 0); }
+  60%  { clip-path: inset(60% 0 22% 0); }
+  75%  { clip-path: inset(35% 0 45% 0); }
+  100% { clip-path: inset(0 0 100% 0); }
 }
 
 #playlist-list {
@@ -253,6 +300,15 @@ body {
   transition: background 0.2s;
 }
 .sidebar-btn:hover { background: #3a7a52; }
+
+.sidebar-btn.pulse {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(45, 90, 62, 0.3); }
+  50% { opacity: 0.7; box-shadow: 0 0 12px rgba(45, 90, 62, 0.8); }
+}
 
 #watch-status {
   margin: 4px 12px 8px;

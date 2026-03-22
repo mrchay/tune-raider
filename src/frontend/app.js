@@ -63,7 +63,15 @@ function handleMessage(msg) {
 
     case 'workspace':
       document.getElementById('workspace-path').value = msg.path || '';
-      if (msg.path) setWorkspaceStatus('Workspace: ' + msg.path, 'ok');
+      if (msg.error) {
+        setWorkspaceStatus('Workspace failed to load: ' + msg.error, 'error');
+        openSettings();
+      } else if (msg.path) {
+        setWorkspaceStatus('Workspace: ' + msg.path, 'ok');
+      } else {
+        setWorkspaceStatus('No workspace configured', 'error');
+        openSettings();
+      }
       break;
 
     case 'workspaceSet':
@@ -178,6 +186,13 @@ function handleMessage(msg) {
 function rebuildPlaylistSidebar() {
   const ul = document.getElementById('playlist-list');
   ul.innerHTML = '';
+
+  const exportBtn = document.getElementById('btn-exportify');
+  if (playlists.length === 0) {
+    exportBtn.classList.add('pulse');
+  } else {
+    exportBtn.classList.remove('pulse');
+  }
 
   const liAll = document.createElement('li');
   liAll.dataset.playlist = '';
@@ -574,30 +589,35 @@ document.getElementById('btn-search').addEventListener('click', () => {
   if (keys.length === 0) return;
   const auto = document.getElementById('chk-auto-download').checked;
   send('startPipeline', { keys, threads: getThreadConfig(), mode: auto ? 'full' : 'search' });
+  triggerGlitch();
 });
 
 document.getElementById('btn-download').addEventListener('click', () => {
   const keys = [...selectedKeys];
   if (keys.length === 0) return;
   send('startPipeline', { keys, threads: getThreadConfig(), mode: 'download' });
+  triggerGlitch();
 });
 
 document.getElementById('btn-analyse').addEventListener('click', () => {
   const keys = [...selectedKeys];
   if (keys.length === 0) return;
   send('startPipeline', { keys, threads: getThreadConfig(), mode: 'analyse' });
+  triggerGlitch();
 });
 
 document.getElementById('btn-full').addEventListener('click', () => {
   const keys = [...selectedKeys];
   if (keys.length === 0) return;
   send('startPipeline', { keys, threads: getThreadConfig(), mode: 'full' });
+  triggerGlitch();
 });
 
 document.getElementById('btn-reset').addEventListener('click', () => {
   const keys = [...selectedKeys];
   if (keys.length === 0) return;
   send('resetTracks', { keys });
+  triggerGlitch();
 });
 
 document.getElementById('btn-delete').addEventListener('click', () => {
@@ -606,6 +626,7 @@ document.getElementById('btn-delete').addEventListener('click', () => {
   const count = allTracks.filter(t => keys.includes(t.key) && t.file_path).length;
   if (!confirm(`Delete downloaded files for ${count} track(s)?\n\nThis will remove the files from disk and reset the pipeline state.`)) return;
   send('deleteTracks', { keys });
+  triggerGlitch();
 });
 
 // ── CSV Import (drag & drop + click) ──
@@ -948,6 +969,19 @@ function setWorkspaceStatus(text, cls) {
   const el = document.getElementById('workspace-status');
   el.textContent = text;
   el.className = 'workspace-status' + (cls ? ' ' + cls : '');
+}
+
+function openSettings() {
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+// ── One-shot glitch ──
+
+function triggerGlitch() {
+  const el = document.getElementById('sidebar-art');
+  el.classList.remove('glitch-once');
+  void el.offsetWidth; // force reflow to restart animation
+  el.classList.add('glitch-once');
 }
 
 // ── Toast notifications ──

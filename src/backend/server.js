@@ -16,7 +16,10 @@ const DEFAULT_WORKSPACE = path.join(__dirname, '..', '..', 'workspace');
 function loadConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
-  } catch {
+  } catch (err) {
+    if (fs.existsSync(CONFIG_PATH)) {
+      console.error(`[backend] Failed to parse config.json: ${err.message}`);
+    }
     return {};
   }
 }
@@ -208,6 +211,8 @@ function stopWatchingDownloads() {
 
 // ── WebSocket server ──
 
+let workspaceError = '';
+
 const wss = new WebSocketServer({ port: PORT });
 
 wss.on('listening', () => {
@@ -218,8 +223,10 @@ wss.on('listening', () => {
   if (wsPath) {
     try {
       initWorkspace(wsPath);
+      workspaceError = '';
       console.log(`[backend] Workspace loaded: ${wsPath}`);
     } catch (err) {
+      workspaceError = err.message;
       console.error(`[backend] Failed to load workspace: ${err.message}`);
     }
   }
@@ -251,7 +258,9 @@ function handleMessage(ws, msg) {
 
     case 'getWorkspace': {
       const config = loadConfig();
-      ws.send(JSON.stringify({ type: 'workspace', path: config.workspace || '' }));
+      const resp = { type: 'workspace', path: config.workspace || '' };
+      if (workspaceError) resp.error = workspaceError;
+      ws.send(JSON.stringify(resp));
       break;
     }
 
@@ -263,8 +272,10 @@ function handleMessage(ws, msg) {
         initWorkspace(wsPath);
         config.workspace = wsPath;
         saveConfig(config);
+        workspaceError = '';
         log(`Workspace set: ${wsPath}`);
         ws.send(JSON.stringify({ type: 'workspaceSet', path: wsPath, created: true }));
+        checkYtStatus(ws);
       } catch (err) {
         ws.send(JSON.stringify({ type: 'error', message: `Failed to set workspace: ${err.message}` }));
       }
