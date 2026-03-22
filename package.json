@@ -1,0 +1,19 @@
+{
+  "name": "tune-raider",
+  "version": "1.0.0",
+  "description": "Music download manager",
+  "scripts": {
+    "start": "node dev.js",
+    "start:backend": "node src/backend/server.js",
+    "start:frontend": "npx nw src/frontend",
+    "build": "node build.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "nw": "0.109.0-sdk",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "nw-builder": "^4.13.4"
+  }
+}

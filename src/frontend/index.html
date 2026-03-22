@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Tune Raider</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- ── Titlebar ── -->
+  <header id="titlebar">
+    <div class="title">Tune Raider</div>
+    <div class="titlebar-actions">
+      <label class="auto-check" title="Automatically download the top-scored result after searching">
+        <input type="checkbox" id="chk-auto-download"> Auto
+      </label>
+      <span id="selection-count"></span>
+      <button id="btn-search" class="action-btn search-btn" disabled>Search</button>
+      <button id="btn-download" class="action-btn download-btn" disabled>Download</button>
+      <button id="btn-analyse" class="action-btn analyse-btn" disabled>Analyse</button>
+      <button id="btn-full" class="action-btn full-btn" disabled>Pipeline</button>
+      <span class="toolbar-sep"></span>
+      <button id="btn-reset" class="action-btn reset-btn" disabled>Reset</button>
+      <button id="btn-delete" class="action-btn delete-btn" disabled>Delete</button>
+      <span class="toolbar-sep"></span>
+    </div>
+    <div class="titlebar-right">
+      <div class="yt-status" id="yt-status" title="YouTube account status">
+        <span class="yt-dot"></span>
+        <span class="yt-label">No cookies</span>
+      </div>
+      <button id="btn-settings" class="icon-btn" title="Settings">&#9881;</button>
+      <div class="status" id="conn">Disconnected</div>
+    </div>
+  </header>
+
+  <!-- ── Main layout ── -->
+  <div id="app">
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">Playlists</div>
+      <ul id="playlist-list"></ul>
+      <img src="raider.png" id="sidebar-art" alt="">
+      <button id="btn-exportify" class="sidebar-btn" title="Opens exportify.net and watches for downloaded CSVs">Open Exportify</button>
+      <div id="drop-zone">
+        <div class="drop-label">Drop CSV files here<br>to import playlists</div>
+        <input type="file" id="file-input" multiple accept=".csv" style="display:none">
+      </div>
+      <div id="watch-status" class="hidden"></div>
+    </aside>
+
+    <!-- Main content -->
+    <div id="main">
+
+      <!-- Toolbar -->
+      <div id="toolbar">
+        <div class="toolbar-left">
+          <input type="text" id="filter-text" placeholder="Filter tracks...">
+          <select id="filter-status">
+            <option value="">All statuses</option>
+            <option value="ready">Ready</option>
+            <option value="searched">Searched</option>
+            <option value="downloaded">Downloaded</option>
+            <option value="failed">Failed</option>
+            <option value="queued">Queued</option>
+            <option value="active">Active</option>
+          </select>
+          <select id="filter-playlist">
+            <option value="">All playlists</option>
+          </select>
+          <select id="filter-quality">
+            <option value="">All qualities</option>
+            <option value="lossless">Lossless</option>
+            <option value="320">320k+</option>
+            <option value="256">256k+</option>
+            <option value="192">192k+</option>
+            <option value="low">Below 192k</option>
+            <option value="none">Not analysed</option>
+          </select>
+          <select id="filter-match">
+            <option value="">All matches</option>
+            <option value="verified">Verified (80%+)</option>
+            <option value="partial">Partial (50-80%)</option>
+            <option value="poor">Poor (&lt;50%)</option>
+            <option value="none">Not matched</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Track table -->
+      <div id="track-table-wrap">
+        <table id="track-table">
+          <thead>
+            <tr>
+              <th class="col-expand"></th>
+              <th class="col-check"><input type="checkbox" id="check-all" title="Select all visible"></th>
+              <th class="col-title">Title</th>
+              <th class="col-artist">Artist</th>
+              <th class="col-album">Album</th>
+              <th class="col-duration">Duration</th>
+              <th class="col-status">Status</th>
+              <th class="col-quality">Quality</th>
+              <th class="col-fingerprint">Match</th>
+            </tr>
+          </thead>
+          <tbody id="track-body"></tbody>
+        </table>
+        <div id="track-empty">No tracks loaded. Import playlists from the sidebar.</div>
+      </div>
+
+      <!-- Resize handle -->
+      <div id="dock-handle" title="Drag to resize">
+        <div class="handle-grip"></div>
+      </div>
+
+      <!-- Bottom panel: tabs for Queue and Console -->
+      <div id="dock">
+        <div class="dock-header">
+          <div class="dock-tabs">
+            <button class="dock-tab active" data-dock="threads">Threads <span class="dock-stats" id="dock-stats"></span></button>
+            <button class="dock-tab" data-dock="queue">Queue</button>
+            <button class="dock-tab" data-dock="console">Console</button>
+          </div>
+          <div class="dock-controls">
+            <div class="thread-controls">
+              <label class="thread-label search-label">Search <select id="threads-search">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+              </select></label>
+              <label class="thread-label download-label">DL <select id="threads-download">
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+              </select></label>
+              <label class="thread-label analyse-label">Analyse <select id="threads-analyse">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+              </select></label>
+            </div>
+            <button id="btn-clear-console" class="icon-btn" title="Clear console" style="display:none">&#128465;</button>
+            <button id="btn-toggle-dock" class="icon-btn" title="Toggle dock">&#9650;</button>
+          </div>
+        </div>
+        <div class="dock-body dock-panel active" id="dock-threads">
+          <div id="thread-lanes"></div>
+        </div>
+        <div class="dock-body dock-panel" id="dock-queue">
+          <div id="queue-list"></div>
+        </div>
+        <div class="dock-body dock-panel" id="dock-console">
+          <div id="console-output"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="modal-overlay" class="hidden">
+    <div id="settings-modal">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button id="btn-close-settings" class="icon-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-section">
+          <label>Workspace Folder</label>
+          <div class="workspace-row">
+            <input type="text" id="workspace-path" readonly placeholder="No workspace selected">
+            <button id="btn-choose-workspace">Browse...</button>
+            <button id="btn-default-workspace" class="secondary-btn">Default</button>
+          </div>
+          <input type="file" id="workspace-picker" nwdirectory style="display:none">
+          <div class="workspace-status" id="workspace-status"></div>
+        </div>
+
+        <div class="settings-section">
+          <label>YouTube Authentication</label>
+          <div class="settings-info">
+            To download premium quality audio, sign in to YouTube Music and export your cookies.
+          </div>
+          <div class="browser-select">
+            <span class="browser-label">Browser:</span>
+            <button class="browser-btn active" data-browser="chrome" id="btn-browser-chrome">Chrome</button>
+            <button class="browser-btn" data-browser="firefox" id="btn-browser-firefox">Firefox</button>
+          </div>
+          <div class="settings-steps">
+            <div class="step">
+              <span class="step-num">1</span>
+              <span class="step-text">Install a cookies export extension</span>
+              <button id="btn-launch-cookie-ext" class="secondary-btn step-btn">Get Extension</button>
+            </div>
+            <div class="step">
+              <span class="step-num">2</span>
+              <span class="step-text">Sign in to YouTube Music</span>
+              <button id="btn-launch-ytm" class="secondary-btn step-btn">Open YouTube Music</button>
+            </div>
+            <div class="step">
+              <span class="step-num">3</span>
+              <span class="step-text">Export cookies and drop the file below</span>
+            </div>
+          </div>
+          <div id="cookie-drop-zone" class="cookie-drop">
+            <div class="drop-label">Drop cookies.txt here</div>
+            <input type="file" id="cookie-file-input" accept=".txt" style="display:none">
+          </div>
+          <div class="cookie-status" id="cookie-status"></div>
+        </div>
+
+        <div class="settings-section">
+          <label>AcoustID Fingerprinting</label>
+          <div class="settings-info">
+            AcoustID is used to verify downloaded tracks by audio fingerprint.
+            Get a free API key to enable this feature.
+          </div>
+          <div class="settings-steps">
+            <div class="step">
+              <span class="step-num">1</span>
+              <span class="step-text">Create a free account at acoustid.org</span>
+              <button id="btn-acoustid-register" class="secondary-btn step-btn">Register</button>
+            </div>
+            <div class="step">
+              <span class="step-num">2</span>
+              <span class="step-text">Create a new application to get an API key</span>
+              <button id="btn-acoustid-newapp" class="secondary-btn step-btn">New App</button>
+            </div>
+            <div class="step">
+              <span class="step-num">3</span>
+              <span class="step-text">Paste your API key below</span>
+            </div>
+          </div>
+          <div class="workspace-row">
+            <input type="text" id="acoustid-key" placeholder="Enter AcoustID API key" spellcheck="false">
+            <button id="btn-save-acoustid" class="secondary-btn">Save</button>
+          </div>
+          <div class="acoustid-status" id="acoustid-status"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+node_modules/
+release/
+.build-cache/
+workspace/
+config.json
+__pycache__/
+
+# Large binaries — downloaded by install.bat
+src/backend/tools/ffmpeg.exe
+src/backend/tools/ffprobe.exe
+
+# Small tools + Python scripts in tools/ are committed:
+# yt-dlp.exe, fpcalc.exe, identify.py, whatsmybitrate.py, wmb_core.py

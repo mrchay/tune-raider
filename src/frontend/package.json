@@ -1,0 +1,12 @@
+{
+  "name": "tune-raider",
+  "main": "index.html",
+  "window": {
+    "title": "Tune Raider",
+    "width": 1400,
+    "height": 900,
+    "min_width": 800,
+    "min_height": 600,
+    "icon": "icon.png"
+  }
+}
