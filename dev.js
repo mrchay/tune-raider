@@ -19,8 +19,8 @@ backend.stderr.on('data', (chunk) => {
 // Give backend a moment to start, then launch NW.js frontend
 setTimeout(async () => {
   // Resolve NW.js binary path directly — avoids npx/shell inheriting console
-  const nw = require('nw');
-  const nwPath = await nw.findpath();
+  const { findpath } = await import('nw');
+  const nwPath = await findpath();
   const frontendPath = path.join(__dirname, 'src', 'frontend');
 
   const frontend = spawn(nwPath, [frontendPath], {
