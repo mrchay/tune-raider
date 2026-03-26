@@ -116,8 +116,12 @@ function runYtdlp(args, opts = {}) {
 
     const stdoutChunks = [];
     const stderrChunks = [];
+    let stderrLen = 0;
+    const MAX_STDERR = 1024 * 1024; // 1MB cap
     proc.stdout.on('data', (chunk) => stdoutChunks.push(chunk));
-    proc.stderr.on('data', (chunk) => stderrChunks.push(chunk));
+    proc.stderr.on('data', (chunk) => {
+      if (stderrLen < MAX_STDERR) { stderrChunks.push(chunk); stderrLen += chunk.length; }
+    });
 
     const timer = setTimeout(() => {
       try { proc.kill(); } catch {}

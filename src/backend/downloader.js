@@ -2,7 +2,7 @@
  * downloader.js — Downloads audio from YouTube using yt-dlp.
  * Takes a URL (from search candidates), downloads as FLAC with metadata.
  */
-const { execFile } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { safeFilename } = require('./utils');
@@ -138,33 +138,52 @@ function runYtdlp(args, opts = {}) {
   const cleanArgs = args.map(a => a.replace(/^"|"$/g, ''));
 
   return new Promise((resolve) => {
-    const proc = execFile(ytdlp, cleanArgs, {
-      timeout: opts.timeout || 300000,
-      encoding: 'buffer',
-      maxBuffer: 50 * 1024 * 1024,
+    const proc = spawn(ytdlp, cleanArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      detached: true,
       env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-    }, (error, stdout, stderr) => {
+    });
+
+    const stderrChunks = [];
+    let stderrLen = 0;
+    const MAX_STDERR = 1024 * 1024;
+    let stdoutLine = '';
+
+    proc.stdout.on('data', (chunk) => {
+      stdoutLine += chunk.toString('utf-8');
+      const lines = stdoutLine.split('\n');
+      stdoutLine = lines.pop();
+      for (const line of lines) {
+        if (line.trim() && opts.onStdout) opts.onStdout(line);
+      }
+    });
+
+    proc.stderr.on('data', (chunk) => {
+      if (stderrLen < MAX_STDERR) { stderrChunks.push(chunk); stderrLen += chunk.length; }
+    });
+
+    const timer = setTimeout(() => {
+      try { process.kill(-proc.pid); } catch {}
+      try { proc.kill(); } catch {}
+    }, opts.timeout || 300000);
+
+    proc.on('close', (code) => {
+      clearTimeout(timer);
       resolve({
-        status: error ? (error.code || 1) : 0,
-        stdout: stdout ? stdout.toString('utf-8') : '',
-        stderr: stderr ? stderr.toString('utf-8') : '',
-        error,
+        status: code || 0,
+        stdout: '',
+        stderr: Buffer.concat(stderrChunks).toString('utf-8'),
+        error: code ? { code } : null,
       });
     });
 
-    // Stream stdout for progress
-    if (opts.onStdout && proc.stdout) {
-      let buffer = '';
-      proc.stdout.on('data', (chunk) => {
-        buffer += chunk.toString('utf-8');
-        const lines = buffer.split('\n');
-        buffer = lines.pop(); // Keep incomplete line
-        for (const line of lines) {
-          if (line.trim()) opts.onStdout(line);
-        }
-      });
-    }
+    proc.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ status: 1, stdout: '', stderr: '', error: err });
+    });
+
+    proc.unref();
   });
 }
 

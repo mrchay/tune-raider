@@ -241,7 +241,12 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
       return;
     }
-    handleMessage(ws, msg);
+    try {
+      handleMessage(ws, msg);
+    } catch (err) {
+      console.error(`[backend] Error handling "${msg.type}":`, err);
+      ws.send(JSON.stringify({ type: 'error', message: err.message }));
+    }
   });
 
   ws.on('close', () => {
@@ -325,32 +330,31 @@ function handleMessage(ws, msg) {
 
     case 'resetTracks': {
       if (!db.get()) break;
-      for (const key of msg.keys) {
-        db.resetTrackForRedownload(key);
-      }
+      db.batchResetTracks(msg.keys);
       log(`Reset ${msg.keys.length} track(s)`);
+      pipeline.markAllDirty();
       ws.send(JSON.stringify({ type: 'tracksReset', count: msg.keys.length }));
       break;
     }
 
     case 'deleteTracks': {
       if (!db.get()) break;
-      const wsPath = getWorkspacePath();
       let deleted = 0;
+      // Delete files first (needs track data before reset)
       for (const key of msg.keys) {
         const track = db.getTrack(key);
-        if (track) {
-          if (track.file_path) {
-            try {
-              if (fs.existsSync(track.file_path)) { fs.unlinkSync(track.file_path); deleted++; }
-            } catch (err) {
-              log(`Failed to delete file for "${key}": ${err.message}`, 'error');
-            }
+        if (track?.file_path) {
+          try {
+            if (fs.existsSync(track.file_path)) { fs.unlinkSync(track.file_path); deleted++; }
+          } catch (err) {
+            log(`Failed to delete file for "${key}": ${err.message}`, 'error');
           }
         }
-        db.resetTrackForRedownload(key);
       }
+      // Batch reset all tracks in single transaction
+      db.batchResetTracks(msg.keys);
       log(`Deleted ${deleted} file(s), reset ${msg.keys.length} track(s)`);
+      pipeline.markAllDirty();
       ws.send(JSON.stringify({ type: 'tracksDeleted', deleted, count: msg.keys.length }));
       break;
     }
@@ -363,6 +367,7 @@ function handleMessage(ws, msg) {
       }
       try {
         const count = importCSVFile(wsPath, msg.filename, msg.content);
+        pipeline.markAllDirty();
         log(`Imported playlist: ${msg.filename} (${count} tracks)`);
         ws.send(JSON.stringify({ type: 'importResult', filename: msg.filename, count }));
       } catch (err) {
@@ -379,6 +384,7 @@ function handleMessage(ws, msg) {
         // Remove the CSV file
         const csvPath = path.join(wsPath, 'playlists', msg.name + '.csv');
         if (fs.existsSync(csvPath)) fs.unlinkSync(csvPath);
+        pipeline.markAllDirty();
         log(`Deleted playlist: ${msg.name}`);
         ws.send(JSON.stringify({ type: 'playlistDeleted', name: msg.name }));
       } catch (err) {
@@ -402,6 +408,7 @@ function handleMessage(ws, msg) {
       if (msg.acoustid_api_key !== undefined) config.acoustid_api_key = msg.acoustid_api_key;
       if (msg.request_delay !== undefined) config.request_delay = Number(msg.request_delay);
       saveConfig(config);
+      pipeline.invalidateDelayCache();
       log('Config updated');
       ws.send(JSON.stringify({
         type: 'config',
@@ -485,7 +492,8 @@ function handleMessage(ws, msg) {
 function broadcast(data) {
   const payload = JSON.stringify(data);
   for (const client of wss.clients) {
-    if (client.readyState === 1) {
+    // Skip clients that are not open or have >1MB buffered (backpressure)
+    if (client.readyState === 1 && client.bufferedAmount < 1024 * 1024) {
       client.send(payload);
     }
   }

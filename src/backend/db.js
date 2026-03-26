@@ -145,6 +145,15 @@ function getTrack(key) {
   return db.prepare('SELECT * FROM tracks WHERE key = ?').get(key);
 }
 
+/** Batch update multiple tracks in a single transaction */
+function batchUpdateStatus(items) {
+  db.transaction(() => {
+    for (const { key, status, extra = {} } of items) {
+      updateTrackStatus(key, status, extra);
+    }
+  })();
+}
+
 function updateTrackStatus(key, status, extra = {}) {
   const sets = ['status = @status'];
   const params = { key, status };
@@ -171,10 +180,21 @@ function resetTrackForRedownload(key) {
       spectrogram = '',
       error = '',
       searched_at = '',
-      downloaded_at = ''
+      downloaded_at = '',
+      queue_stage = '',
+      queue_mode = ''
     WHERE key = ?
   `).run(key);
   db.prepare('DELETE FROM candidates WHERE track_key = ?').run(key);
+}
+
+/** Batch reset multiple tracks in a single transaction */
+function batchResetTracks(keys) {
+  db.transaction(() => {
+    for (const key of keys) {
+      resetTrackForRedownload(key);
+    }
+  })();
 }
 
 function deletePlaylist(name) {
@@ -286,7 +306,7 @@ function recoverStuckTracks() {
 module.exports = {
   open, close, get,
   upsertTrack, upsertTracksFromCSV, getAllTracks, getTrack,
-  updateTrackStatus, resetTrackForRedownload, deletePlaylist, getPlaylists,
+  updateTrackStatus, batchUpdateStatus, resetTrackForRedownload, batchResetTracks, deletePlaylist, getPlaylists,
   insertCandidates, getCandidates, selectCandidate,
   getQueuedTracks, resetQueuedTracks, recoverStuckTracks,
 };

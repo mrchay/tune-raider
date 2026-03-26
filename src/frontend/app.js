@@ -10,6 +10,8 @@ let playlists = [];
 let selectedKeys = new Set();
 let activePlaylist = '';
 let expandedKey = null;     // currently expanded track
+const MAX_CANDIDATE_CACHE = 100;
+const candidateCacheOrder = []; // LRU tracking
 let candidateCache = {};    // trackKey → candidates[]
 let threads = [];
 let activeTrackKeys = new Set();  // keys currently being processed by a worker
@@ -104,6 +106,13 @@ function handleMessage(msg) {
       break;
 
     case 'candidates':
+      // LRU cache: evict oldest if over limit
+      if (!candidateCache[msg.trackKey]) {
+        candidateCacheOrder.push(msg.trackKey);
+        while (candidateCacheOrder.length > MAX_CANDIDATE_CACHE) {
+          delete candidateCache[candidateCacheOrder.shift()];
+        }
+      }
       candidateCache[msg.trackKey] = msg.candidates;
       renderExpandedRow(msg.trackKey);
       break;
